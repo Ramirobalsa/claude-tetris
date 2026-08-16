@@ -1,0 +1,115 @@
+name: Claude Issue Triage
+
+on:
+  issues:
+    types: [opened, edited, reopened]
+
+concurrency:
+  group: issue-triage-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  triage:
+    # Evita bucles (no reaccionar a ediciones hechas por bots) y evita duplicar
+    # trabajo con claude.yml cuando el issue ya menciona a @claude.
+    if: |
+      github.event.sender.type != 'Bot' &&
+      !contains(github.event.issue.body, '@claude') &&
+      !contains(github.event.issue.title, '@claude')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Run Claude Issue Triage
+        id: claude-triage
+        uses: anthropics/claude-code-action@v1
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+
+          prompt: |
+            Estás analizando el issue #${{ github.event.issue.number }} del repositorio
+            ${{ github.repository }} (un Tetris clásico en JavaScript vanilla, sin build
+            ni tests automatizados — toda la lógica del juego vive en `game.js`).
+
+            Tu tarea es SOLO diagnosticar y clasificar. NO modifiques ningún archivo del
+            repositorio, no abras pull requests y no edites el cuerpo del issue.
+
+            Pasos:
+
+            1. Leé el issue con `gh issue view ${{ github.event.issue.number }} --json title,body,author,labels,comments`.
+            2. Leé `CLAUDE.md`, `game.js`, `index.html` y `style.css` para entender la
+               arquitectura real del proyecto antes de opinar sobre causas.
+            3. Clasificá el issue eligiendo SOLO labels que ya existan en el repo
+               (confirmalo con `gh label list`):
+               - Exactamente un tipo: bug, enhancement, documentation o question.
+               - Exactamente un area:*, un priority:* y un complexity:*.
+               - Si el issue no trae información suficiente para diagnosticar con
+                 confianza, agregá también needs-info.
+               - Aplicá siempre triaged.
+               Aplicá los labels con:
+               `gh issue edit ${{ github.event.issue.number }} --add-label "label1,label2,..."`
+            4. Redactá un diagnóstico técnico completo y guardalo en un archivo temporal
+               (por ejemplo /tmp/diagnostico.md), y publicalo con
+               `gh issue comment ${{ github.event.issue.number }} --body-file /tmp/diagnostico.md`
+               (usá --body-file, no --body, para evitar problemas de escape con
+               backticks y saltos de línea). El diagnóstico debe estar en español y
+               seguir esta estructura:
+
+               ## 🔍 Diagnóstico automático
+
+               **Resumen:** (1-2 frases de qué pide o reporta el issue)
+
+               ### Clasificación
+               | | |
+               |---|---|
+               | Tipo | ... |
+               | Área | area:... |
+               | Prioridad | priority:... (justificación en una línea) |
+               | Complejidad | complexity:... |
+
+               ### Análisis técnico
+               (Archivos y funciones implicadas, referenciadas como `game.js:123`
+               (nombreFuncion). Verificá cada referencia leyendo el archivo real, no
+               inventes líneas ni nombres. Explicá cómo funciona hoy ese camino de
+               código.)
+
+               ### Causa raíz probable
+               (Para bugs: qué hace mal el código. Para features: qué falta y dónde
+               encajaría en la arquitectura existente.)
+
+               ### Enfoque de solución propuesto
+               (Pasos concretos, archivo por archivo/función.)
+
+               ### Riesgos y efectos colaterales
+               (Qué otras partes del juego podrían verse afectadas por el cambio.)
+
+               ### Cómo verificarlo manualmente
+               (Pasos reproducibles abriendo index.html en el navegador — no hay tests
+               automatizados en este repo.)
+
+               ### Si falta información
+               (Preguntas concretas al autor del issue. Omití esta sección si no aplica.)
+
+               ---
+               *Generado automáticamente por Claude. Para que implemente la solución,
+               comentá `@claude` en este issue.*
+
+            Reglas importantes:
+            - Si el issue es vago o le falta información, decilo abiertamente en el
+              diagnóstico, aplicá needs-info y hacé preguntas concretas en vez de
+              especular o inventar una causa raíz.
+            - Si este issue ya tiene un comentario previo de diagnóstico automático
+              (por ejemplo porque estás re-analizando tras una edición), publicá un
+              comentario nuevo y aclarálo en el encabezado como re-análisis, no
+              reemplaces el anterior.
+
+          claude_args: >-
+            --allowedTools "Read,Glob,Grep,Bash(gh issue view:*),Bash(gh issue edit:*),Bash(gh issue comment:*),Bash(gh label list:*)"
